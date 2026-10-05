@@ -16,6 +16,24 @@ use Marko\Cache\Redis\Signer\CacheValueSigner;
 
 readonly class RedisCacheDriver implements CacheInterface
 {
+    /**
+     * Increment a counter and apply its TTL in one atomic step.
+     *
+     * The TTL is set when the counter is created, and also whenever the key has
+     * no TTL at all (-1), so a counter left without an expiry can never limit a
+     * client forever. An existing TTL is never reset, keeping the window fixed.
+     */
+    private const string INCREMENT_SCRIPT = <<<'LUA'
+        local value = redis.call('INCR', KEYS[1])
+        local ttl = tonumber(ARGV[1])
+        if ttl > 0 and (value == 1 or redis.call('TTL', KEYS[1]) == -1) then
+            redis.call('EXPIRE', KEYS[1], ttl)
+        end
+        return value
+        LUA;
+
+    private const string INTEGER_PATTERN = '/\A-?\d+\z/';
+
     public function __construct(
         private RedisConnection $connection,
         private CacheConfig $config,
@@ -37,7 +55,7 @@ readonly class RedisCacheDriver implements CacheInterface
             return $default;
         }
 
-        return unserialize($this->cacheValueSigner->verifyAndUnwrap($data));
+        return $this->decode($data);
     }
 
     /**
@@ -120,7 +138,7 @@ readonly class RedisCacheDriver implements CacheInterface
             ? (new DateTimeImmutable())->setTimestamp(time() + $ttl)
             : null;
 
-        return CacheItem::hit($key, unserialize($this->cacheValueSigner->verifyAndUnwrap($data)), $expiresAt);
+        return CacheItem::hit($key, $this->decode($data), $expiresAt);
     }
 
     /**
@@ -145,7 +163,7 @@ readonly class RedisCacheDriver implements CacheInterface
             if ($value === null) {
                 $result[$key] = $default;
             } else {
-                $result[$key] = unserialize($this->cacheValueSigner->verifyAndUnwrap($value));
+                $result[$key] = $this->decode($value);
             }
         }
 
@@ -208,16 +226,33 @@ readonly class RedisCacheDriver implements CacheInterface
     ): int {
         $this->validateKey($key);
 
-        $client = $this->connection->client();
-        $prefixedKey = $this->prefixKey($key);
+        return (int) $this->connection->client()->eval(
+            self::INCREMENT_SCRIPT,
+            1,
+            $this->prefixKey($key),
+            $ttl,
+        );
+    }
 
-        $newValue = $client->incr($prefixedKey);
-
-        if ($newValue === 1 && $ttl > 0) {
-            $client->expire($prefixedKey, $ttl);
+    /**
+     * Decode a raw Redis value.
+     *
+     * Counters written by increment() are bare integers (Redis INCR cannot write
+     * an HMAC envelope), so they are returned as ints. Everything else must be a
+     * signed envelope; it is verified before unserialize() ever sees it. A signed
+     * envelope always starts with 64 hex characters followed by '.', so it can
+     * never be mistaken for an integer.
+     *
+     * @throws TamperedCacheValueException
+     */
+    private function decode(
+        string $data,
+    ): mixed {
+        if (preg_match(self::INTEGER_PATTERN, $data) === 1) {
+            return (int) $data;
         }
 
-        return $newValue;
+        return unserialize($this->cacheValueSigner->verifyAndUnwrap($data));
     }
 
     /**
