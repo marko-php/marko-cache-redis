@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Marko\Cache\Redis;
 
+use Marko\Cache\Redis\Exceptions\RedisConnectionException;
 use Predis\Client;
 use Predis\ClientInterface;
+use Predis\CommunicationException;
 
 class RedisConnection
 {
@@ -19,6 +21,9 @@ class RedisConnection
         public readonly string $prefix = 'marko:cache:',
     ) {}
 
+    /**
+     * @throws RedisConnectionException
+     */
     public function client(): ClientInterface
     {
         if ($this->client === null) {
@@ -38,6 +43,11 @@ class RedisConnection
         return $this->client !== null;
     }
 
+    /**
+     * Create and connect the Predis client.
+     *
+     * @throws RedisConnectionException
+     */
     protected function createClient(): ClientInterface
     {
         $parameters = [
@@ -51,6 +61,25 @@ class RedisConnection
             $parameters['password'] = $this->password;
         }
 
-        return new Client($parameters);
+        $client = new Client($parameters);
+        $this->connect($client);
+
+        return $client;
+    }
+
+    /**
+     * Open the connection eagerly so a refused connection fails here, with
+     * the configured host and port, instead of on the first cache command.
+     *
+     * @throws RedisConnectionException
+     */
+    protected function connect(
+        ClientInterface $client,
+    ): void {
+        try {
+            $client->connect();
+        } catch (CommunicationException $e) {
+            throw RedisConnectionException::connectionFailed($this->host, $this->port, $e);
+        }
     }
 }

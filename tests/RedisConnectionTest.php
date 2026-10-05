@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace Marko\Cache\Redis\Tests;
 
+use Marko\Cache\Redis\Exceptions\RedisConnectionException;
 use Marko\Cache\Redis\RedisConnection;
 use Predis\Client;
 use Predis\ClientInterface;
+use Predis\Connection\ConnectionException;
+use Predis\Connection\Parameters;
+use Predis\Connection\StreamConnection;
 
 function createMockRedisClient(): ClientInterface
 {
@@ -39,6 +43,52 @@ function createTestableRedisConnection(
 }
 
 describe('RedisConnection', function (): void {
+    it(
+        'throws RedisConnectionException naming host, port and config file when the connection is refused',
+        function (): void {
+            $connection = new class () extends RedisConnection
+            {
+                public function __construct()
+                {
+                    parent::__construct(host: 'redis.internal', port: 6390);
+                }
+
+                protected function createClient(): ClientInterface
+                {
+                    /** @noinspection PhpMissingParentConstructorInspection - Test stub intentionally skips parent */
+                    $client = new class () extends Client
+                    {
+                        /** @noinspection PhpMissingParentConstructorInspection */
+                        public function __construct() {}
+
+                        public function connect(): void
+                        {
+                            throw new ConnectionException(
+                                new StreamConnection(new Parameters()),
+                                'Connection refused [tcp://redis.internal:6390]',
+                            );
+                        }
+                    };
+
+                    $this->connect($client);
+
+                    return $client;
+                }
+            };
+
+            try {
+                $connection->client();
+                $this->fail('Expected RedisConnectionException');
+            } catch (RedisConnectionException $e) {
+                expect($e->getMessage())->toContain('redis.internal:6390')
+                    ->and($e->getSuggestion())->toContain('config/cache-redis.php')
+                    ->and($e->getSuggestion())->toContain('REDIS_HOST')
+                    ->and($e->getPrevious())->not->toBeNull()
+                    ->and($connection->isConnected())->toBeFalse();
+            }
+        },
+    );
+
     it('creates RedisConnection with default configuration', function (): void {
         $connection = new RedisConnection();
 
