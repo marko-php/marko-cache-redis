@@ -13,7 +13,9 @@ return [
         CacheInterface::class => RedisCacheDriver::class,
         RedisConnection::class => static function (ContainerInterface $container): RedisConnection {
             $config = $container->get(ConfigRepositoryInterface::class);
-            $password = $config->get(key: 'cache-redis.password');
+            // An app config that sets a key to null removes it (ConfigMerger
+            // unsets null overrides), so a missing key also means "no password".
+            $password = $config->has(key: 'cache-redis.password') ? $config->get(key: 'cache-redis.password') : null;
 
             return new RedisConnection(
                 host: $config->getString(key: 'cache-redis.host'),

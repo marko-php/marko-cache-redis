@@ -74,6 +74,16 @@ describe('cache-redis module bindings', function (): void {
             ->and($fromEmpty->password)->toBeNull();
     });
 
+    it('treats a cache-redis password removed by a null app override as no password', function (): void {
+        $config = cacheRedisConfig();
+        unset($config['cache-redis.password']);
+
+        $connection = createCacheRedisContainer($config)->get(RedisConnection::class);
+
+        expect($connection->password)->toBeNull()
+            ->and($connection->host)->toBe('redis.internal');
+    });
+
     it('resolves the same RedisConnection instance twice', function (): void {
         $container = createCacheRedisContainer(cacheRedisConfig());
 
