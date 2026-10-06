@@ -11,15 +11,29 @@ use Predis\CommunicationException;
 
 class RedisConnection
 {
+    /**
+     * Transport schemes: tcp is plain text, tls encrypts the connection and verifies the server
+     * certificate against the host name.
+     */
+    public const array SCHEMES = ['tcp', 'tls'];
+
     private ?ClientInterface $client = null;
 
+    /**
+     * @throws RedisConnectionException when the scheme is not one of SCHEMES
+     */
     public function __construct(
         public readonly string $host = '127.0.0.1',
         public readonly int $port = 6379,
         public readonly ?string $password = null,
         public readonly int $database = 0,
         public readonly string $prefix = 'marko:cache:',
-    ) {}
+        public readonly string $scheme = 'tcp',
+    ) {
+        if (!in_array($scheme, self::SCHEMES, true)) {
+            throw RedisConnectionException::invalidScheme($scheme, self::SCHEMES);
+        }
+    }
 
     /**
      * @throws RedisConnectionException
@@ -44,24 +58,43 @@ class RedisConnection
     }
 
     /**
+     * The Predis connection parameters. With the tls scheme the server
+     * certificate is verified against the system trust store and the host name.
+     *
+     * @return array<string, mixed>
+     */
+    public function connectionParameters(): array
+    {
+        $parameters = [
+            'scheme' => $this->scheme,
+            'host' => $this->host,
+            'port' => $this->port,
+            'database' => $this->database,
+        ];
+
+        if ($this->scheme === 'tls') {
+            $parameters['ssl'] = [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+                'peer_name' => $this->host,
+            ];
+        }
+
+        if ($this->password !== null) {
+            $parameters['password'] = $this->password;
+        }
+
+        return $parameters;
+    }
+
+    /**
      * Create and connect the Predis client.
      *
      * @throws RedisConnectionException
      */
     protected function createClient(): ClientInterface
     {
-        $parameters = [
-            'scheme' => 'tcp',
-            'host' => $this->host,
-            'port' => $this->port,
-            'database' => $this->database,
-        ];
-
-        if ($this->password !== null) {
-            $parameters['password'] = $this->password;
-        }
-
-        $client = new Client($parameters);
+        $client = new Client($this->connectionParameters());
         $this->connect($client);
 
         return $client;

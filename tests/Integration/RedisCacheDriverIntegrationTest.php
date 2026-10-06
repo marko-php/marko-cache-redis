@@ -167,4 +167,38 @@ describe('RedisCacheDriver against a real Redis server', function (): void {
 
         expect($this->driver->get('key'))->toBe(['a' => 1]);
     })->skip(fn (): bool => redisDriverIntegrationUnavailable(), redisDriverIntegrationSkipReason());
+
+    it('rejects a signed value copied to another key in redis', function (): void {
+        $client = $this->connection->client();
+        $this->driver->set('role-alice', 'admin');
+        $client->set($this->connection->prefix . 'role-bob', $client->get($this->connection->prefix . 'role-alice'));
+
+        expect(fn (): mixed => $this->driver->get('role-bob'))
+            ->toThrow(TamperedCacheValueException::class)
+            ->and($this->driver->get('role-alice'))->toBe('admin');
+    })->skip(fn (): bool => redisDriverIntegrationUnavailable(), redisDriverIntegrationSkipReason());
+
+    it('clears every prefixed key with SCAN and leaves other keys alone', function (): void {
+        $client = $this->connection->client();
+        $outsideKey = 'marko:test:outside:' . bin2hex(random_bytes(6));
+        $client->set($outsideKey, 'keep');
+
+        $values = [];
+
+        foreach (range(1, 2500) as $i) {
+            $values["key$i"] = $i;
+        }
+
+        $this->driver->setMultiple($values);
+        $this->driver->clear();
+
+        $remaining = $client->scan('0', ['MATCH' => $this->connection->prefix . '*', 'COUNT' => 10000]);
+        $outsideValue = $client->get($outsideKey);
+        $client->del($outsideKey);
+
+        expect($this->driver->has('key1'))->toBeFalse()
+            ->and($this->driver->has('key2500'))->toBeFalse()
+            ->and($remaining[1])->toBe([])
+            ->and($outsideValue)->toBe('keep');
+    })->skip(fn (): bool => redisDriverIntegrationUnavailable(), redisDriverIntegrationSkipReason());
 });

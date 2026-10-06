@@ -10,4 +10,5 @@ return [
     'password' => Env::nullableString('REDIS_PASSWORD'),
     'database' => Env::int('REDIS_CACHE_DATABASE', 0, min: 0),
     'prefix' => Env::string('CACHE_PREFIX', 'marko:cache:'),
+    'scheme' => Env::string('REDIS_SCHEME', 'tcp'),
 ];

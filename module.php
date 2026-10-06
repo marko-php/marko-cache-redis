@@ -23,6 +23,7 @@ return [
                 password: $password === null || $password === '' ? null : (string) $password,
                 database: $config->getInt(key: 'cache-redis.database'),
                 prefix: $config->getString(key: 'cache-redis.prefix'),
+                scheme: $config->getString(key: 'cache-redis.scheme'),
             );
         },
     ],

@@ -62,6 +62,15 @@ class MockRedisClient extends Client
 
     public ?string $lastEvalScript = null;
 
+    public int $scanCount = 0;
+
+    public int $scanPageSize = 2;
+
+    public string $lastScanPattern = '';
+
+    /** @var list<string> */
+    private array $scanSnapshot = [];
+
     /** @noinspection PhpMissingParentConstructorInspection */
     public function __construct() {}
 
@@ -163,16 +172,40 @@ class MockRedisClient extends Client
         return [];
     }
 
+    /**
+     * KEYS blocks the Redis server on a large keyspace, so the driver must never call it.
+     */
     public function keys(
         $pattern,
     ): array {
-        $regex = '/^' . str_replace('*', '.*', preg_quote($pattern, '/')) . '$/';
-        $regex = str_replace('\\.*', '.*', $regex);
+        throw new RuntimeException('RedisCacheDriver must not call KEYS; use SCAN.');
+    }
 
-        return array_values(array_filter(
-            array_keys($this->storage),
-            fn ($key) => preg_match($regex, $key) === 1,
-        ));
+    /**
+     * Emulates SCAN: walks a snapshot of the keyspace $scanPageSize keys per call,
+     * returning the MATCH hits from each page and a cursor of "0" once the walk is
+     * complete. Like Redis, keys deleted mid-walk do not cause others to be skipped.
+     *
+     * @return array{0: string, 1: list<string>}
+     */
+    public function scan(
+        $cursor,
+        ?array $options = null,
+    ): array {
+        $this->scanCount++;
+        $this->lastScanPattern = $options['MATCH'] ?? '*';
+
+        if ((string) $cursor === '0') {
+            $this->scanSnapshot = array_keys($this->storage);
+        }
+
+        $page = array_slice($this->scanSnapshot, (int) $cursor, $this->scanPageSize);
+        $next = (int) $cursor + $this->scanPageSize;
+
+        return [
+            $next >= count($this->scanSnapshot) ? '0' : (string) $next,
+            array_values(array_filter($page, fn ($key) => fnmatch($this->lastScanPattern, $key))),
+        ];
     }
 
     public function ttl(
@@ -266,14 +299,16 @@ function createDriver(
     int $defaultTtl = 3600,
     string $signingKey = 'test-signing-key',
     ?FakeClock $clock = null,
+    string $prefix = 'marko:cache:',
 ): RedisCacheDriver {
     $mockClient ??= createMockClient();
-    $connection = new class ($mockClient) extends RedisConnection
+    $connection = new class ($mockClient, $prefix) extends RedisConnection
     {
         public function __construct(
             private readonly ClientInterface $mockClient,
+            string $prefix,
         ) {
-            parent::__construct();
+            parent::__construct(prefix: $prefix);
         }
 
         protected function createClient(): ClientInterface
@@ -372,6 +407,36 @@ describe('RedisCacheDriver', function (): void {
 
     it('returns true when clearing', function (): void {
         expect($this->driver->clear())->toBeTrue();
+    });
+
+    it('clears with SCAN across every page and removes only prefixed keys', function (): void {
+        $this->mockClient->storage['other:app:key'] = 'keep';
+        $this->mockClient->storage['marko:cachex'] = 'keep';
+
+        foreach (range(1, 5) as $i) {
+            $this->driver->set("key$i", "value$i");
+        }
+
+        $this->mockClient->storage['session:abc'] = 'keep';
+
+        $this->driver->clear();
+
+        expect(array_keys($this->mockClient->storage))->toBe(['other:app:key', 'marko:cachex', 'session:abc'])
+            ->and($this->mockClient->scanCount)->toBe(4)
+            ->and($this->mockClient->lastScanPattern)->toBe('marko:cache:*');
+    });
+
+    it('escapes glob characters in the prefix when clearing', function (): void {
+        $mockClient = createMockClient();
+        $driver = createDriver($mockClient, prefix: 'app[1]*:');
+
+        $driver->set('key', 'value');
+        $mockClient->storage['app1x:other'] = 'keep';
+
+        $driver->clear();
+
+        expect(array_keys($mockClient->storage))->toBe(['app1x:other'])
+            ->and($mockClient->lastScanPattern)->toBe('app\[1\]\*:*');
     });
 
     it('sets value with TTL', function (): void {
@@ -583,6 +648,34 @@ describe('RedisCacheDriver', function (): void {
 
         expect(fn () => $driver->get('key'))
             ->toThrow(TamperedCacheValueException::class);
+    });
+
+    it('rejects a signed value copied from one cache key to another', function (): void {
+        $mockClient = createMockClient();
+        $driver = createDriver($mockClient);
+
+        $driver->set('role-alice', 'admin');
+        $driver->set('role-bob', 'guest');
+        $mockClient->storage['marko:cache:role-bob'] = $mockClient->storage['marko:cache:role-alice'];
+
+        expect(fn () => $driver->get('role-bob'))
+            ->toThrow(TamperedCacheValueException::class)
+            ->and(fn () => $driver->getItem('role-bob'))
+            ->toThrow(TamperedCacheValueException::class)
+            ->and(fn () => $driver->getMultiple(['role-alice', 'role-bob']))
+            ->toThrow(TamperedCacheValueException::class)
+            ->and($driver->get('role-alice'))->toBe('admin');
+    });
+
+    it('binds the MAC to the prefixed key rather than the bare key', function (): void {
+        $mockClient = createMockClient();
+        $driver = createDriver($mockClient);
+
+        $driver->set('key', 'value');
+
+        expect(createSigner()->unwrap($mockClient->storage['marko:cache:key'], 'marko:cache:key'))
+            ->toBe(serialize('value'))
+            ->and(createSigner()->unwrap($mockClient->storage['marko:cache:key'], 'key'))->toBeNull();
     });
 
     it('throws loudly when the signing key is empty', function (): void {

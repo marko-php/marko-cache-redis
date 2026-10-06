@@ -43,6 +43,7 @@ function cacheRedisConfig(
         'cache-redis.password' => $password,
         'cache-redis.database' => 3,
         'cache-redis.prefix' => 'app:cache:',
+        'cache-redis.scheme' => 'tls',
     ];
 }
 
@@ -50,9 +51,16 @@ describe('cache-redis module bindings', function (): void {
     it('ships a cache-redis config file with connection defaults', function (): void {
         $config = require dirname(__DIR__) . '/config/cache-redis.php';
 
-        expect($config)->toHaveKeys(['host', 'port', 'password', 'database', 'prefix'])
+        expect($config)->toHaveKeys(['host', 'port', 'password', 'database', 'prefix', 'scheme'])
             ->and($config['port'])->toBeInt()
-            ->and($config['database'])->toBeInt();
+            ->and($config['database'])->toBeInt()
+            ->and($config['scheme'])->toBe('tcp');
+    });
+
+    it('passes the cache-redis scheme to RedisConnection', function (): void {
+        $connection = createCacheRedisContainer(cacheRedisConfig())->get(RedisConnection::class);
+
+        expect($connection->scheme)->toBe('tls');
     });
 
     it('resolves RedisConnection with values from cache-redis config', function (): void {

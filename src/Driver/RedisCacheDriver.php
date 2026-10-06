@@ -34,6 +34,11 @@ readonly class RedisCacheDriver implements CacheInterface
 
     private const string INTEGER_PATTERN = '/\A-?\d+\z/';
 
+    /**
+     * How many keys clear() asks SCAN to examine per round trip.
+     */
+    private const int SCAN_COUNT = 1000;
+
     public function __construct(
         private RedisConnection $connection,
         private CacheConfig $config,
@@ -50,13 +55,14 @@ readonly class RedisCacheDriver implements CacheInterface
     ): mixed {
         $this->validateKey($key);
 
-        $data = $this->connection->client()->get($this->prefixKey($key));
+        $prefixedKey = $this->prefixKey($key);
+        $data = $this->connection->client()->get($prefixedKey);
 
         if ($data === null) {
             return $default;
         }
 
-        return $this->decode($data);
+        return $this->decode($data, $prefixedKey);
     }
 
     /**
@@ -71,7 +77,7 @@ readonly class RedisCacheDriver implements CacheInterface
 
         $ttl ??= $this->config->defaultTtl();
         $prefixedKey = $this->prefixKey($key);
-        $envelope = $this->cacheValueSigner->wrap(serialize($value));
+        $envelope = $this->cacheValueSigner->wrap(serialize($value), $prefixedKey);
 
         if ($ttl > 0) {
             $this->connection->client()->setex($prefixedKey, $ttl, $envelope);
@@ -106,14 +112,26 @@ readonly class RedisCacheDriver implements CacheInterface
         return true;
     }
 
+    /**
+     * Delete every key under the configured prefix.
+     *
+     * Walks the keyspace with SCAN in batches instead of KEYS, which blocks the
+     * Redis server for the whole scan on a large database. Glob characters in the
+     * prefix are escaped so the MATCH pattern matches the prefix literally.
+     */
     public function clear(): bool
     {
         $client = $this->connection->client();
-        $keys = $client->keys($this->connection->prefix . '*');
+        $pattern = $this->escapeGlob($this->connection->prefix) . '*';
+        $cursor = '0';
 
-        if ($keys !== []) {
-            $client->del($keys);
-        }
+        do {
+            [$cursor, $keys] = $client->scan($cursor, ['MATCH' => $pattern, 'COUNT' => self::SCAN_COUNT]);
+
+            if ($keys !== []) {
+                $client->del($keys);
+            }
+        } while ((string) $cursor !== '0');
 
         return true;
     }
@@ -141,7 +159,7 @@ readonly class RedisCacheDriver implements CacheInterface
             ? $now->setTimestamp($now->getTimestamp() + $ttl)
             : null;
 
-        return CacheItem::hit($key, $this->decode($data), $expiresAt);
+        return CacheItem::hit($key, $this->decode($data, $prefixedKey), $expiresAt);
     }
 
     /**
@@ -166,7 +184,7 @@ readonly class RedisCacheDriver implements CacheInterface
             if ($value === null) {
                 $result[$key] = $default;
             } else {
-                $result[$key] = $this->decode($value);
+                $result[$key] = $this->decode($value, $prefixedKeys[$i]);
             }
         }
 
@@ -190,7 +208,7 @@ readonly class RedisCacheDriver implements CacheInterface
         $client->pipeline(function ($pipe) use ($values, $ttl): void {
             foreach ($values as $key => $value) {
                 $prefixedKey = $this->prefixKey($key);
-                $envelope = $this->cacheValueSigner->wrap(serialize($value));
+                $envelope = $this->cacheValueSigner->wrap(serialize($value), $prefixedKey);
 
                 if ($ttl > 0) {
                     $pipe->setex($prefixedKey, $ttl, $envelope);
@@ -246,16 +264,20 @@ readonly class RedisCacheDriver implements CacheInterface
      * envelope always starts with 64 hex characters followed by '.', so it can
      * never be mistaken for an integer.
      *
+     * The MAC is bound to the prefixed key the value was read from, so a valid
+     * envelope copied from one key to another does not verify.
+     *
      * @throws TamperedCacheValueException
      */
     private function decode(
         string $data,
+        string $prefixedKey,
     ): mixed {
         if (preg_match(self::INTEGER_PATTERN, $data) === 1) {
             return (int) $data;
         }
 
-        return unserialize($this->cacheValueSigner->verifyAndUnwrap($data));
+        return unserialize($this->cacheValueSigner->verifyAndUnwrap($data, $prefixedKey));
     }
 
     /**
@@ -277,5 +299,14 @@ readonly class RedisCacheDriver implements CacheInterface
         string $key,
     ): string {
         return $this->connection->prefix . $key;
+    }
+
+    /**
+     * Escape the Redis glob metacharacters (* ? [ ] \) so a pattern matches literally.
+     */
+    private function escapeGlob(
+        string $value,
+    ): string {
+        return addcslashes($value, '*?[]\\');
     }
 }

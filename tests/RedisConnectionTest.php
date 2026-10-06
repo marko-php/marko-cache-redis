@@ -117,6 +117,36 @@ describe('RedisConnection', function (): void {
             ->and($connection->prefix)->toBe('custom:prefix:');
     });
 
+    it('defaults to the plain tcp scheme without TLS context options', function (): void {
+        $parameters = new RedisConnection()->connectionParameters();
+
+        expect($parameters['scheme'])->toBe('tcp')
+            ->and($parameters)->not->toHaveKey('ssl');
+    });
+
+    it('builds TLS connection parameters that verify the server certificate and host name', function (): void {
+        $connection = new RedisConnection(host: 'cache.example.com', port: 6380, password: 'secret', scheme: 'tls');
+
+        expect($connection->scheme)->toBe('tls')
+            ->and($connection->connectionParameters())->toBe([
+                'scheme' => 'tls',
+                'host' => 'cache.example.com',
+                'port' => 6380,
+                'database' => 0,
+                'ssl' => [
+                    'verify_peer' => true,
+                    'verify_peer_name' => true,
+                    'peer_name' => 'cache.example.com',
+                ],
+                'password' => 'secret',
+            ]);
+    });
+
+    it('throws RedisConnectionException for an unknown scheme', function (): void {
+        expect(fn () => new RedisConnection(scheme: 'rediss'))
+            ->toThrow(RedisConnectionException::class, "Invalid Redis connection scheme 'rediss'");
+    });
+
     it('lazily connects on first client call', function (): void {
         $connection = createTestableRedisConnection();
 
