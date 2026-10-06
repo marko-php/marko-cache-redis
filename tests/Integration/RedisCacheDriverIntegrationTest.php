@@ -8,6 +8,7 @@ use Marko\Cache\Redis\Exceptions\TamperedCacheValueException;
 use Marko\Cache\Redis\RedisConnection;
 use Marko\Cache\Redis\Signer\CacheValueSigner;
 use Marko\Clock\SystemClock;
+use Marko\Core\Support\ErrorCapture;
 use Marko\Encryption\Config\EncryptionConfig;
 use Marko\Testing\Fake\FakeConfigRepository;
 use Predis\Client;
@@ -31,30 +32,43 @@ function redisDriverIntegrationPort(): int
 function redisDriverIntegrationSkipReason(): string
 {
     return sprintf(
-        'Redis is not reachable at %s:%d. Start one (e.g. `docker run -p 6379:6379 redis:7-alpine`) or set MARKO_TEST_REDIS_HOST / MARKO_TEST_REDIS_PORT.',
+        'Redis is not reachable at %s:%d: %s. Start one (e.g. `docker run -p 6379:6379 redis:7-alpine`) or set MARKO_TEST_REDIS_HOST / MARKO_TEST_REDIS_PORT.',
         redisDriverIntegrationHost(),
         redisDriverIntegrationPort(),
+        redisDriverIntegrationUnreachableReason() ?? 'no reason given',
     );
+}
+
+/**
+ * Pings Redis once and returns why it is unreachable, or null when it answers.
+ * Predis suppresses its own connect warning with @, which PHPUnit still records,
+ * so the ping runs inside ErrorCapture to keep the skip probe warning-free.
+ */
+function redisDriverIntegrationUnreachableReason(): ?string
+{
+    static $probed = false;
+    static $reason = null;
+
+    if (!$probed) {
+        $probed = true;
+
+        try {
+            ErrorCapture::run($warning, fn (): mixed => new Client([
+                'host' => redisDriverIntegrationHost(),
+                'port' => redisDriverIntegrationPort(),
+                'timeout' => 0.5,
+            ])->ping());
+        } catch (Throwable $e) {
+            $reason = $e->getMessage();
+        }
+    }
+
+    return $reason;
 }
 
 function redisDriverIntegrationUnavailable(): bool
 {
-    static $unavailable = null;
-
-    if ($unavailable === null) {
-        try {
-            new Client([
-                'host' => redisDriverIntegrationHost(),
-                'port' => redisDriverIntegrationPort(),
-                'timeout' => 0.5,
-            ])->ping();
-            $unavailable = false;
-        } catch (Throwable) {
-            $unavailable = true;
-        }
-    }
-
-    return $unavailable;
+    return redisDriverIntegrationUnreachableReason() !== null;
 }
 
 function createIntegrationRedisConnection(): RedisConnection
