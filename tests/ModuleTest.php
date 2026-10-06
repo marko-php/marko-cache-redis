@@ -53,3 +53,9 @@ test('it has correct PSR-4 autoloading namespace', function (): void {
         ->and($composer['autoload']['psr-4'])->toHaveKey('Marko\\Cache\\Redis\\')
         ->and($composer['autoload']['psr-4']['Marko\\Cache\\Redis\\'])->toBe('src/');
 });
+
+test('it requires marko/clock in composer.json', function (): void {
+    $composer = json_decode(file_get_contents(dirname(__DIR__) . '/composer.json'), true);
+
+    expect($composer['require'])->toHaveKey('marko/clock');
+});

@@ -11,6 +11,7 @@ use Marko\Cache\Redis\Exceptions\TamperedCacheValueException;
 use Marko\Cache\Redis\RedisConnection;
 use Marko\Cache\Redis\Signer\CacheValueSigner;
 use Marko\Encryption\Config\EncryptionConfig;
+use Marko\Testing\Fake\FakeClock;
 use Marko\Testing\Fake\FakeConfigRepository;
 use Predis\Client;
 use Predis\ClientInterface;
@@ -264,6 +265,7 @@ function createDriver(
     ?MockRedisClient $mockClient = null,
     int $defaultTtl = 3600,
     string $signingKey = 'test-signing-key',
+    ?FakeClock $clock = null,
 ): RedisCacheDriver {
     $mockClient ??= createMockClient();
     $connection = new class ($mockClient) extends RedisConnection
@@ -281,7 +283,7 @@ function createDriver(
     };
     $config = createCacheConfig($defaultTtl);
 
-    return new RedisCacheDriver($connection, $config, createSigner($signingKey));
+    return new RedisCacheDriver($connection, $config, createSigner($signingKey), $clock ?? new FakeClock());
 }
 
 describe('RedisCacheDriver', function (): void {
@@ -436,6 +438,18 @@ describe('RedisCacheDriver', function (): void {
         $item = $this->driver->getItem('key');
 
         expect($item->expiresAt())->not->toBeNull();
+    });
+
+    it('reports the item expiry as the clock time plus the remaining redis ttl', function (): void {
+        $clock = new FakeClock('2026-01-01 12:00:00 UTC');
+        $driver = createDriver($this->mockClient, clock: $clock);
+        $driver->set('key', 'value', 3600);
+        $this->mockClient->ttls['marko:cache:key'] = 1200;
+
+        $expiresAt = $driver->getItem('key')->expiresAt();
+
+        expect($expiresAt)->not->toBeNull()
+            ->and($expiresAt->getTimestamp())->toBe($clock->now()->getTimestamp() + 1200);
     });
 
     it('returns cache item without expiration for persistent key', function (): void {

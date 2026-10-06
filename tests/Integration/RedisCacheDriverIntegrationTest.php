@@ -7,6 +7,7 @@ use Marko\Cache\Redis\Driver\RedisCacheDriver;
 use Marko\Cache\Redis\Exceptions\TamperedCacheValueException;
 use Marko\Cache\Redis\RedisConnection;
 use Marko\Cache\Redis\Signer\CacheValueSigner;
+use Marko\Clock\SystemClock;
 use Marko\Encryption\Config\EncryptionConfig;
 use Marko\Testing\Fake\FakeConfigRepository;
 use Predis\Client;
@@ -79,6 +80,7 @@ function createIntegrationRedisDriver(
         new CacheValueSigner(new EncryptionConfig(new FakeConfigRepository([
             'encryption.key' => 'integration-signing-key',
         ]))),
+        new SystemClock(),
     );
 }
 

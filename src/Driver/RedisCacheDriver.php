@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Marko\Cache\Redis\Driver;
 
-use DateTimeImmutable;
 use Marko\Cache\CacheItem;
 use Marko\Cache\Config\CacheConfig;
 use Marko\Cache\Contracts\CacheInterface;
@@ -13,6 +12,7 @@ use Marko\Cache\Exceptions\InvalidKeyException;
 use Marko\Cache\Redis\Exceptions\TamperedCacheValueException;
 use Marko\Cache\Redis\RedisConnection;
 use Marko\Cache\Redis\Signer\CacheValueSigner;
+use Psr\Clock\ClockInterface;
 
 readonly class RedisCacheDriver implements CacheInterface
 {
@@ -38,6 +38,7 @@ readonly class RedisCacheDriver implements CacheInterface
         private RedisConnection $connection,
         private CacheConfig $config,
         private CacheValueSigner $cacheValueSigner,
+        private ClockInterface $clock,
     ) {}
 
     /**
@@ -133,9 +134,11 @@ readonly class RedisCacheDriver implements CacheInterface
             return CacheItem::miss($key);
         }
 
+        // Redis enforces the expiry itself; the clock only anchors the reported time.
         $ttl = $client->ttl($prefixedKey);
+        $now = $this->clock->now();
         $expiresAt = $ttl > 0
-            ? (new DateTimeImmutable())->setTimestamp(time() + $ttl)
+            ? $now->setTimestamp($now->getTimestamp() + $ttl)
             : null;
 
         return CacheItem::hit($key, $this->decode($data), $expiresAt);
