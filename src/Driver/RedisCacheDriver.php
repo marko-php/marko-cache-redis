@@ -9,9 +9,9 @@ use Marko\Cache\Config\CacheConfig;
 use Marko\Cache\Contracts\CacheInterface;
 use Marko\Cache\Contracts\CacheItemInterface;
 use Marko\Cache\Exceptions\InvalidKeyException;
-use Marko\Cache\Redis\Exceptions\TamperedCacheValueException;
+use Marko\Cache\Exceptions\TamperedCacheValueException;
 use Marko\Cache\Redis\RedisConnection;
-use Marko\Cache\Redis\Signer\CacheValueSigner;
+use Marko\Cache\Signer\CacheValueSigner;
 use Psr\Clock\ClockInterface;
 
 readonly class RedisCacheDriver implements CacheInterface

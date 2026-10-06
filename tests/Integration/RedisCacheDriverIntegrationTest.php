@@ -3,10 +3,10 @@
 declare(strict_types=1);
 
 use Marko\Cache\Config\CacheConfig;
+use Marko\Cache\Exceptions\TamperedCacheValueException;
 use Marko\Cache\Redis\Driver\RedisCacheDriver;
-use Marko\Cache\Redis\Exceptions\TamperedCacheValueException;
 use Marko\Cache\Redis\RedisConnection;
-use Marko\Cache\Redis\Signer\CacheValueSigner;
+use Marko\Cache\Signer\CacheValueSigner;
 use Marko\Clock\SystemClock;
 use Marko\Core\Support\ErrorCapture;
 use Marko\Encryption\Config\EncryptionConfig;
