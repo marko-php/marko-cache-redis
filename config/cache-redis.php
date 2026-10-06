@@ -2,10 +2,12 @@
 
 declare(strict_types=1);
 
+use Marko\Config\Env;
+
 return [
-    'host' => $_ENV['REDIS_HOST'] ?? '127.0.0.1',
-    'port' => (int) ($_ENV['REDIS_PORT'] ?? 6379),
-    'password' => $_ENV['REDIS_PASSWORD'] ?? null,
-    'database' => (int) ($_ENV['REDIS_CACHE_DATABASE'] ?? 0),
-    'prefix' => $_ENV['CACHE_PREFIX'] ?? 'marko:cache:',
+    'host' => Env::string('REDIS_HOST', '127.0.0.1'),
+    'port' => Env::int('REDIS_PORT', 6379, min: 1, max: 65535),
+    'password' => Env::nullableString('REDIS_PASSWORD'),
+    'database' => Env::int('REDIS_CACHE_DATABASE', 0, min: 0),
+    'prefix' => Env::string('CACHE_PREFIX', 'marko:cache:'),
 ];
